@@ -127,6 +127,124 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
   we give you to get an idea of what an offensive agent might look like,
   but it is by no means the best or only way to build an offensive agent.
   """
+    def choose_action(self, game_state):
+        my_state = game_state.get_agent_state(self.index)
+
+        # Only return when we are attacking
+        if not my_state.is_pacman:
+            return super().choose_action(game_state)
+        my_pos = my_state.get_position()
+        carrying = my_state.num_carrying
+
+        # Find visible enemy ghosts that are not scared
+        dangerous_ghosts = []
+
+        for opponent_index in self.get_opponents(game_state):
+            enemy = game_state.get_agent_state(opponent_index)
+            enemy_pos = enemy.get_position()
+
+            scared_timer = getattr(
+                enemy, 'scared_timer',
+                getattr(enemy, 'scaredTimer', 0)
+            )
+
+            if (enemy_pos is not None
+                    and not enemy.is_pacman
+                    and scared_timer <= 0):
+                dangerous_ghosts.append(enemy_pos)
+
+        # Define ghost_is_close when they are close to pacman
+        ghost_is_close = any(
+            self.get_maze_distance(my_pos, ghost_pos) <= 3
+            for ghost_pos in dangerous_ghosts
+        )
+
+        # Return home if carrying enough food or in danger
+        if carrying >= 5 or (carrying > 0 and ghost_is_close):
+            return self.choose_return_action(game_state, dangerous_ghosts)
+
+        # Otherwise we ontinue looking for food
+        return super().choose_action(game_state)
+    
+    def get_home_positions(self, game_state):
+        walls = game_state.get_walls()
+        middle = walls.width // 2
+
+        # Find the column on our side of the border
+        if self.start[0] < middle:
+            home_x = middle - 1
+        else:
+            home_x = middle
+
+        # Keep only positions where there is no wall
+        home_positions = [
+            (home_x, y)
+            for y in range(walls.height)
+            if not walls[home_x][y]
+        ]
+
+        return home_positions
+    
+    def choose_return_action(self, game_state, dangerous_ghosts):
+        actions = game_state.get_legal_actions(self.index)
+
+        if not actions:
+            return None
+
+        home_positions = self.get_home_positions(game_state)
+
+        if not home_positions:
+            return super().choose_action(game_state)
+
+        # Avoid staying still when other actions are available
+        moving_actions = [
+            action for action in actions
+            if action != Directions.STOP
+        ]
+
+        if moving_actions:
+            actions = moving_actions
+
+        best_cost = float('inf')
+        best_actions = []
+
+        for action in actions:
+            successor = self.get_successor(game_state, action)
+            next_pos = successor.get_agent_state(self.index).get_position()
+
+            if next_pos is None:
+                continue
+
+            # Distance from the next position to our border
+            home_distance = min(
+                self.get_maze_distance(next_pos, home)
+                for home in home_positions
+            )
+
+            # Add a penalty when an enemy ghost is nearby
+            danger_penalty = 0
+
+            for ghost_pos in dangerous_ghosts:
+                ghost_distance = self.get_maze_distance(
+                    next_pos, ghost_pos
+                )
+
+                if ghost_distance <= 4:
+                    danger_penalty += 8 * (5 - ghost_distance)
+
+            # Combine distance and danger
+            total_cost = home_distance + danger_penalty
+
+            if total_cost < best_cost:
+                best_cost = total_cost
+                best_actions = [action]
+            elif total_cost == best_cost:
+                best_actions.append(action)
+
+        if best_actions:
+            return random.choice(best_actions)
+
+        return super().choose_action(game_state)
 
     def get_features(self, game_state, action):
         features = util.Counter()
